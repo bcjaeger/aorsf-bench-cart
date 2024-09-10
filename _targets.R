@@ -20,12 +20,12 @@ tibble::tribble(
   #         "biomass", "modeldata",     "regression",                  "HHV",
   #      "car_prices", "modeldata",     "regression",                "Price",
   # "chem_proc_yield", "modeldata",     "regression",                "yield",
-         "concrete", "modeldata",     "regression", "compressive_strength",
+  #        "concrete", "modeldata",     "regression", "compressive_strength",
   "ischemic_stroke", "modeldata", "classification",               "stroke",
     #     "ad_data", "modeldata", "classification",                "Class",
     #   "attrition", "modeldata", "classification",            "Attrition",
     #       "cells", "modeldata", "classification",                "class",
-    # "credit_data", "modeldata", "classification",               "Status"
+    "credit_data", "modeldata", "classification",               "Status"
     # "grants_other", "modeldata", "classification",                "class"
   )
 
@@ -84,8 +84,6 @@ tar_data <- tar_map(
 
                }
 
-               time_tune_start <- Sys.time()
-
                tune_object <- tune_grid(
                  models$spec[[1]],
                  grid = models$grid[[1]],
@@ -95,18 +93,8 @@ tar_data <- tar_map(
                  control = control_grid(save_workflow = TRUE)
                )
 
-               time_tune_stop <- Sys.time()
-
-               score_inner <- collect_metrics(tune_object) %>%
-                 arrange(desc(mean)) %>%
-                 dplyr::slice(1) %>%
-                 pull(mean)
-
-
                time_fit_start <- Sys.time()
-
                fit_final <- fit_best(x = tune_object)
-
                time_fit_stop <- Sys.time()
 
                pred_col <- infer_pred_col(guide, mode, outcome)
@@ -125,10 +113,6 @@ tar_data <- tar_map(
                  mutate(model_id = models$model_id[1],
                         fold_id = resamples$id,
                         vs_threshold = models$vs_threshold,
-                        score_inner = score_inner,
-                        time_tune = difftime(time_tune_stop,
-                                             time_tune_start,
-                                             units = 's'),
                         time_fit = difftime(time_fit_stop,
                                             time_fit_start,
                                             units = 's'))
@@ -143,21 +127,15 @@ tar_scores <- tar_combine(
   scores,
   tar_data$nested_cv_result,
   command = bind_rows(!!!.x, .id = 'data') %>%
-    mutate(data = str_remove(data, '^nested_cv_result_')) %>%
-    separate(model_id, into = c("engine", ".iter")) %>%
-    select(-starts_with(".")) %>%
-    group_by(data, engine, fold_id) %>%
-    arrange(desc(score_inner)) %>%
-    slice(1) %>%
-    ungroup()
+    mutate(data = str_remove(data, '^nested_cv_result_'))
 )
 
 tar_scores_summary <- tar_target(
   scores_summary,
   command = {
     scores %>%
-      group_by(data, engine) %>%
-      summarize(across(starts_with("score"), ~ mean(.x)))
+      group_by(data, model_id, vs_threshold) %>%
+      summarize(across(matches("^score|^time"), ~ mean(.x)))
   }
 )
 
@@ -165,9 +143,10 @@ tar_ranks <- tar_target(
   ranks,
   command = {
     scores_summary %>%
-      arrange(data, desc(score_outer)) %>%
+      group_by(data, vs_threshold) %>%
+      arrange(data, vs_threshold, desc(score_outer)) %>%
       mutate(rank = seq(n())) %>%
-      group_by(engine) %>%
+      group_by(model_id, vs_threshold) %>%
       summarize(rank = mean(rank))
   }
 )
